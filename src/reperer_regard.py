@@ -31,25 +31,28 @@ def retrieve_subject_data(num_sujet):
     
     video_file = f"AcquisitionsEyeTracker/{sujet_id}/{video_name}.mp4"
     gaze_file = f"AcquisitionsEyeTracker/{sujet_id}/gaze.csv"
+    world_timestamps_file = f"AcquisitionsEyeTracker/{sujet_id}/world_timestamps.csv"
     camera_parameters_file =  f"AcquisitionsEyeTracker/{sujet_id}/scene_camera.json"
     
-    return video_file, gaze_file, camera_parameters_file
+    return video_file, gaze_file, camera_parameters_file, world_timestamps_file
 
 
-
-def affichage_video_undistorted(video_file, gaze_file, camera_parameters_file):
+def affichage_video_undistorted(video_file, gaze_file, camera_parameters_file, world_timestamps_file):
     # Ouverture des fichiers
     scene_camera = json.load(open(camera_parameters_file))
     gaze_csv = pd.read_csv(gaze_file)
     video = cv2.VideoCapture(video_file)
+    world_ts = pd.read_csv(world_timestamps_file)["timestamp [ns]"].to_numpy()
+    gaze_ts = gaze_csv["timestamp [ns]"].to_numpy()
 
     if not video.isOpened():
         raise FileNotFoundError(f"Cannot open video file: {video_file}")
-
+    
     # Récupération de la colone gaze x [px]
     gaze_x = gaze_csv['gaze x [px]'].to_numpy()
     # Récupération de la colone gaze y [px]
     gaze_y = gaze_csv['gaze y [px]'].to_numpy()
+
 
     # Récupération des paramètres de la caméra
     distortion_coefficients = np.array(scene_camera['distortion_coefficients'])
@@ -66,10 +69,15 @@ def affichage_video_undistorted(video_file, gaze_file, camera_parameters_file):
         undistorted_frame = cv2.undistort(frame, camera_matrix, distortion_coefficients)
         h, w = undistorted_frame.shape[:2]
         
-        # Safely get gaze coordinates
-        
-        gx = gaze_x[frame_index]
-        gy = gaze_y[frame_index]
+        # Récupération du timestamp pour cette frame 
+        ts = world_ts[frame_index]
+
+        gi = np.argmin(np.abs(gaze_ts - ts))
+
+        # Récupération des coordonnées du regard
+        gx = gaze_x[gi]
+        gy = gaze_y[gi]
+
         pts = np.array([[[float(gx), float(gy)]]], dtype=np.float32)  # shape (1,1,2)
         # Undistort the point; P=camera_matrix returns pixel coords in the undistorted image
         undist_pt = cv2.undistortPoints(pts, camera_matrix, distortion_coefficients, P=camera_matrix)
@@ -92,8 +100,8 @@ def main():
         sujet = int(sys.argv[1])
     else:
         sujet = 2
-    video_file, gaze_file, camera_parameters_file = retrieve_subject_data(sujet)
-    affichage_video_undistorted(video_file, gaze_file, camera_parameters_file)
+    video_file, gaze_file, camera_parameters_file, world_timestamps_file  = retrieve_subject_data(sujet)
+    affichage_video_undistorted(video_file, gaze_file, camera_parameters_file, world_timestamps_file )
 
 if __name__ == '__main__':
     main()
