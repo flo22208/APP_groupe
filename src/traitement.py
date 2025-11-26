@@ -8,10 +8,17 @@ import numpy as np
 import pandas as pd
 
 ### path video, scene_camera.json, gaze.csv
-sujet = 3
-path_video = f"../../sujet{sujet}/video.mp4"
-path_scene_camera = f"../../sujet{sujet}/scene_camera.json"
-path_gaze_csv = f"../../sujet{sujet}/gaze.csv"
+path_video = r"C:\Users\flori\Documents\Travail\APP\APP\AcquisitionsEyeTracker\sujet1_f-42e0d11a\e0b2c246_0.0-138.011.mp4"
+path_scene_camera = "C:/Users/flori/Documents/Travail/APP/APP/AcquisitionsEyeTracker/sujet1_f-42e0d11a/scene_camera.json"
+path_gaze_csv = "C:/Users/flori/Documents/Travail/APP/APP/AcquisitionsEyeTracker/sujet1_f-42e0d11a/gaze.csv"
+path_affiche_Anning = "C:/Users/flori/Documents/Travail/APP/APP/Affiches/Anning.png"
+path_affiche_Barres = "C:/Users/flori/Documents/Travail/APP/APP/Affiches/Barres.png"
+path_affiche_Bell = "C:/Users/flori/Documents/Travail/APP/APP/Affiches/Bell.png"
+path_affiche_Bunten_Berry = "C:/Users/flori/Documents/Travail/APP/APP/Affiches/Bunten-Berry.png"
+path_affiche_Franklin = "C:/Users/flori/Documents/Travail/APP/APP/Affiches/Franklin.png"
+path_affiche_Gautier = "C:/Users/flori/Documents/Travail/APP/APP/Affiches/Gautier.png"
+path_affiche_johnson = "C:/Users/flori/Documents/Travail/APP/APP/Affiches/johnson.png"
+path_affiche_Noether = "C:/Users/flori/Documents/Travail/APP/APP/Affiches/Noether.png"
 
 ### importation 
 print("Importation des données...")
@@ -20,15 +27,14 @@ gaze_csv = pd.read_csv(path_gaze_csv)
 video = cv2.VideoCapture(path_video)
 if not video.isOpened():
     raise FileNotFoundError(f"Cannot open video file: {path_video}")
-
-#anning_image = cv2.imread(path_affiche_Anning)
-#barres_image = cv2.imread(path_affiche_Barres)
-#bell_image = cv2.imread(path_affiche_Bell)
-#bunten_berry_image = cv2.imread(path_affiche_Bunten_Berry)
-#franklin_image = cv2.imread(path_affiche_Franklin)
-#gautier_image = cv2.imread(path_affiche_Gautier)
-#johnson_image = cv2.imread(path_affiche_johnson)
-#noether_image = cv2.imread(path_affiche_Noether)
+anning_image = cv2.imread(path_affiche_Anning)
+barres_image = cv2.imread(path_affiche_Barres)
+bell_image = cv2.imread(path_affiche_Bell)
+bunten_berry_image = cv2.imread(path_affiche_Bunten_Berry)
+franklin_image = cv2.imread(path_affiche_Franklin)
+gautier_image = cv2.imread(path_affiche_Gautier)
+johnson_image = cv2.imread(path_affiche_johnson)
+noether_image = cv2.imread(path_affiche_Noether)
 
 ##importation de la colone gaze x [px]
 gaze_x = gaze_csv['gaze x [px]'].to_numpy()
@@ -60,6 +66,7 @@ def affichage_disdorded_video():
         # Safely get gaze coordinates
         gx = gaze_x[frame_index]
         gy = gaze_y[frame_index]
+
 
         # Handle missing/NaN gaze values
         if pd.isna(gx) or pd.isna(gy):
@@ -180,4 +187,3 @@ def list_x_y_undistorded():
 
 
 #list_gx_undist, list_gy_undist = list_x_y_undistorded()
-
