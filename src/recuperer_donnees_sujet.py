@@ -24,8 +24,3 @@ def retrieve_subject_data(num_sujet):
     
     return video_file, gaze_file, camera_parameters_file
 
-a,b,c = retrieve_subject_data(1)
-
-print(a)
-print(b)
-print(c)
