@@ -1,4 +1,4 @@
-from src.utils.data_loader import DataLoader
+from src.utils.DataLoader import DataLoader
 import numpy as np
 import cv2
 

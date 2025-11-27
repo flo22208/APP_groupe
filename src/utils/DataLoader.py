@@ -21,6 +21,8 @@ class DataLoader:
 		self.camera_params_filename = config["files"]["camera_params"]
 		self.gaze_filename = config["files"]["gaze"]
 		self.world_timestamps_filename = config["files"]["world_timestamps"]
+		self.yolo_detection_weights = config["paths"]["yolo_detection_weights"]
+		self.detection_results_filename = config["files"]["detection_results"]
 
 	def get_subject_path(self, subject_idx: int) -> str:
 		subject_name = self.subjects[subject_idx]
@@ -85,8 +87,11 @@ class DataLoader:
 		).reshape(-1, 2)
 
 		return gazes_undistorted
-
-	def get_video_capture(self, subject_idx: int):
+	
+	def get_yolo_detection_weights(self) -> str:
+		return self.yolo_detection_weights
+	
+	def get_video_path(self, subject_idx: int) -> str:
 		subject_path = self.get_subject_path(subject_idx)
 		# Find the single .mp4 file in the subject directory
 		mp4_files = [f for f in os.listdir(subject_path) if f.lower().endswith(".mp4")]
@@ -94,8 +99,16 @@ class DataLoader:
 			raise RuntimeError(f"No .mp4 file found in {subject_path}")
 		if len(mp4_files) > 1:
 			raise RuntimeError(f"Multiple .mp4 files found in {subject_path}: {mp4_files}")
-		video_path = os.path.join(subject_path, mp4_files[0])
+		return os.path.join(subject_path, mp4_files[0])
+	
+	def get_video_capture(self, subject_idx: int):
+		video_path = self.get_video_path(subject_idx)
 		cap = cv2.VideoCapture(video_path)
 		if not cap.isOpened():
 			raise RuntimeError(f"Cannot open video: {video_path}")
 		return cap
+	
+	def get_detection_results_path(self, subject_idx: int) -> str:
+		subject_path = self.get_subject_path(subject_idx)
+		return os.path.join(subject_path, self.detection_results_filename)
+	

@@ -1,11 +1,13 @@
 {
     "paths": {
-        "acquisition_data": "data/AcquisitionsEyeTracker/"
+        "acquisition_data": "data/AcquisitionsEyeTracker/",
+        "yolo_detection_weights": "src/detectionModel/run/weights/best.pt"
     },
     "files": {
         "camera_params": "scene_camera.json",
         "gaze": "gaze.csv",
-        "world_timestamps": "world_timestamps.csv"
+        "world_timestamps": "world_timestamps.csv",
+        "detection_results": "detection_results.csv"
     },
     "subjects": [
         "sujet1_f-42e0d11a/",
