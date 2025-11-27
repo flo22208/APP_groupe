@@ -1,0 +1,18 @@
+{
+    "paths": {
+        "acquisition_data": "data/AcquisitionsEyeTracker/"
+    },
+    "files": {
+        "camera_params": "scene_camera.json",
+        "gaze": "gaze.csv",
+        "world_timestamps": "world_timestamps.csv"
+    },
+    "subjects": [
+        "sujet1_f-42e0d11a/",
+        "sujet2_f-835bf855/",
+        "sujet3_m-84ce1158/",
+        "sujet4_m-fee537df/",
+        "sujet5_m-671cf44e/",
+        "sujet6_m-0b355b51/"
+    ]
+}
