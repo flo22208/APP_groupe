@@ -1,7 +1,8 @@
 {
     "paths": {
         "acquisition_data": "data/AcquisitionsEyeTracker/",
-        "yolo_detection_weights": "src/detectionModel/run/weights/best.pt"
+        "yolo_detection_weights": "src/detectionModel/run/weights/best.pt",
+        "posters": "data/Affiches/"
     },
     "files": {
         "camera_params": "scene_camera.json",

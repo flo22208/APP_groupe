@@ -23,6 +23,7 @@ class DataLoader:
 		self.world_timestamps_filename = config["files"]["world_timestamps"]
 		self.yolo_detection_weights = config["paths"]["yolo_detection_weights"]
 		self.detection_results_filename = config["files"]["detection_results"]
+		self.posters_root = config["paths"].get("posters", "data/Affiches/")
 
 	def get_subject_path(self, subject_idx: int) -> str:
 		subject_name = self.subjects[subject_idx]
@@ -111,4 +112,30 @@ class DataLoader:
 	def get_detection_results_path(self, subject_idx: int) -> str:
 		subject_path = self.get_subject_path(subject_idx)
 		return os.path.join(subject_path, self.detection_results_filename)
+
+	def get_posters_path(self) -> str:
+		"""Return the root folder where poster PNGs are stored."""
+		return self.posters_root
+
+	def load_posters(self):
+		"""Load all PNG posters from the posters root folder.
+
+		Returns a list of (filename, image).
+		"""
+		folder = self.get_posters_path()
+		if not os.path.isdir(folder):
+			return []
+
+		paths = [
+			os.path.join(folder, f)
+			for f in os.listdir(folder)
+			if f.lower().endswith(".png")
+		]
+		posters = []
+		for p in paths:
+			img = cv2.imread(p)
+			if img is None:
+				continue
+			posters.append((os.path.basename(p), img))
+		return posters
 	

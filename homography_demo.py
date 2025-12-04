@@ -9,17 +9,6 @@ from src.pipeline.HomographyManager import HomographyManager
 from src.detectionModel.DetectionModel import DetectionModel
 
 
-def load_posters(folder: str) -> List[Tuple[str, np.ndarray]]:
-	paths = [os.path.join(folder, f) for f in os.listdir(folder) if f.lower().endswith(".png")]
-	posters: List[Tuple[str, np.ndarray]] = []
-	for p in paths:
-		img = cv2.imread(p)
-		if img is None:
-			continue
-		posters.append((os.path.basename(p), img))
-	return posters
-
-
 def boxes_to_bboxes(boxes) -> List[Tuple[int, int, int, int]]:
 	"""Convertit les boxes YOLO (results.boxes) en bboxes (x1, y1, x2, y2)."""
 	bboxes: List[Tuple[int, int, int, int]] = []
@@ -70,16 +59,26 @@ def find_best_poster_for_roi(
 
 
 def main():
-	# Chargement données
+	# ------------------ Chargement données ------------------
 	loader = DataLoader("config.json")
+	h_manager = HomographyManager()
 	subject_idx = 0
 
-	# Récupération vidéo et paramètres
+	# ------------------ Récupération vidéo et paramètres ------------------
 	cap = loader.get_video_capture(subject_idx)
 	K, D = loader.get_load_camera_params(subject_idx)
 	gazes_undist = loader.get_undistorted_gazes(subject_idx)
 
-	# Choix d'une frame cible (par ex. milieu de la vidéo)
+	# ------------------ Chargement du modèle de détection ------------------
+	weights_path = loader.get_yolo_detection_weights()
+	det_model = DetectionModel(weights_path)
+
+	# ------------------ Chargement des affiches ------------------
+	posters = loader.load_posters()
+	if not posters:
+		raise RuntimeError("No PNG posters found in posters folder")
+
+	# ------------------ Récupération d'une frame au milieu ------------------
 	n_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 	if n_frames == 0:
 		raise RuntimeError("Video has 0 frame")
@@ -89,25 +88,20 @@ def main():
 	ret, frame = cap.read()
 	if not ret:
 		raise RuntimeError("Cannot read target frame")
-
-	# Gaze associé à cette frame (déjà undistordu dans l'espace vidéo undistordue)
-	if target_frame_idx >= len(gazes_undist):
-		raise RuntimeError("Target frame index out of gaze array range")
-	gx, gy = gazes_undist[target_frame_idx]
-	gaze_point = np.array([gx, gy], dtype=np.float32)
-
-	# Optionnel : undistortion de la frame pour cohérence avec gaze_undist
 	frame_undist = cv2.undistort(frame, K, D)
 
-	# Chargement du modèle de détection et détection directe sur la frame cible
-	weights_path = loader.get_yolo_detection_weights()
-	det_model = DetectionModel(weights_path)
-	boxes = det_model.predict(frame)
+	# ------------------ Traitement ------------------
+
+	# 1- Récupération du point de regard sur la frame cible
+	gx, gy = gazes_undist[target_frame_idx]
+
+	# 2 - Détection des affiches sur la frame
+	boxes = det_model.predict(frame_undist)
 	bboxes = boxes_to_bboxes(boxes)
 	if len(bboxes) == 0:
 		raise RuntimeError("No posters detected on target frame (model output empty)")
 
-	# Trouver l'affiche regardée: bbox contenant le point de regard
+	# 3 - Trouver l'affiche regardée: bbox contenant le point de regard
 	looked_bbox: Optional[Tuple[int, int, int, int]] = None
 	for bbox in bboxes:
 		x1, y1, x2, y2 = bbox
@@ -118,17 +112,9 @@ def main():
 	if looked_bbox is None:
 		raise RuntimeError("Gaze point not inside any detected poster bbox")
 
-	# ROI de l'affiche regardée (on utilise la frame undistordue pour cohérence)
 	roi = crop_with_bbox(frame_undist, looked_bbox)
 
-	# Chargement des affiches PNG
-	posters_folder = os.path.join("data", "Affiches")
-	posters = load_posters(posters_folder)
-	if not posters:
-		raise RuntimeError(f"No PNG posters found in {posters_folder}")
-
-	# Trouver la meilleure affiche PNG qui matche la ROI via homographie
-	h_manager = HomographyManager()
+	# 4 - Trouver la meilleure affiche PNG via homographie
 	best_name, best_H, best_inliers = find_best_poster_for_roi(roi, posters, h_manager)
 	if best_name is None or best_H is None:
 		raise RuntimeError("Could not find a matching poster PNG for ROI")
@@ -137,7 +123,7 @@ def main():
 	print("Number of inliers:", best_inliers)
 
 	# Charger l'image PNG correspondante (taille d'origine)
-	poster_path = os.path.join(posters_folder, best_name)
+	poster_path = os.path.join(loader.get_posters_path(), best_name)
 	poster_img = cv2.imread(poster_path)
 	if poster_img is None:
 		raise RuntimeError(f"Cannot read poster image: {poster_path}")
@@ -148,17 +134,13 @@ def main():
 	if H_roi_to_poster is None:
 		raise RuntimeError("Failed to recompute homography between ROI and poster")
 
-	# Convertit le gaze point (dans frame undistordue) vers coords ROI puis vers coords poster
+	# Projeter le point de regard sur l'affiche
 	x1, y1, x2, y2 = looked_bbox
 	local_point = np.array([gx - x1, gy - y1], dtype=np.float32)
 	projected = h_manager.project_point(local_point, H_roi_to_poster)
 	px, py = int(projected[0]), int(projected[1])
-
-	# Clamp dans les bornes du poster redimensionné
-	px = max(0, min(poster_resized.shape[1] - 1, px))
-	py = max(0, min(poster_resized.shape[0] - 1, py))
-
-	# Visualisation
+ 
+	# --------------------- Visualisation ------------------
 	vis_frame = frame_undist.copy()
 	for bbox in bboxes:
 		x1b, y1b, x2b, y2b = bbox
