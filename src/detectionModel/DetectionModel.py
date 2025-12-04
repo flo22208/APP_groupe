@@ -1,4 +1,5 @@
 from ultralytics import YOLO
+import numpy as np
 import csv
 from pathlib import Path
 
@@ -15,11 +16,9 @@ class DetectionModel:
             # Si le device n'est pas dispo, on laisse le défaut ultralytics
             self.device = None
 
-    def predict(self, image, conf_threshold: float = 0.25):
+    def predict(self, image, conf_threshold: float = 0.25)-> np.ndarray:
         """Retourne les boxes YOLO pour une image.
-
-        Utilise l'inférence standard (plus légère que track) pour
-        optimiser le temps de calcul par frame.
+        Retourne un tableau numpy de shape (N, 4) avec les coordonnées (x1, y1, x2, y2).
         """
         results = self.model(
             image,
@@ -27,7 +26,7 @@ class DetectionModel:
             verbose=False,
             device=self.device if self.device is not None else None,
         )
-        return results[0].boxes
+        return results[0].boxes.xyxy.cpu().numpy()
 
     def track(self, source, conf_threshold: float = 0.3, iou: float = 0.5, persist: bool = True, show: bool = False):
         """Effectue du tracking multi-objet sur une source vidéo.

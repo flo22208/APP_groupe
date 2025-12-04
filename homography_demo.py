@@ -1,62 +1,13 @@
 import os
-from typing import List, Optional, Tuple
+from typing import Optional, Tuple
 
 import cv2
 import numpy as np
+import matplotlib.pyplot as plt
 
 from src.utils.DataLoader import DataLoader
 from src.pipeline.HomographyManager import HomographyManager
 from src.detectionModel.DetectionModel import DetectionModel
-
-
-def boxes_to_bboxes(boxes) -> List[Tuple[int, int, int, int]]:
-	"""Convertit les boxes YOLO (results.boxes) en bboxes (x1, y1, x2, y2)."""
-	bboxes: List[Tuple[int, int, int, int]] = []
-	if boxes is None or len(boxes) == 0:
-		return bboxes
-
-	xyxy = boxes.xyxy.cpu().numpy()
-	for x1, y1, x2, y2 in xyxy:
-		bboxes.append((int(x1), int(y1), int(x2), int(y2)))
-	return bboxes
-
-
-def crop_with_bbox(image: np.ndarray, bbox: Tuple[int, int, int, int]) -> np.ndarray:
-	x1, y1, x2, y2 = bbox
-	return image[y1:y2, x1:x2]
-
-
-def find_best_poster_for_roi(
-	roi: np.ndarray,
-	posters: List[Tuple[str, np.ndarray]],
-	h_manager: HomographyManager,
-	min_inliers: int = 10,
-) -> Tuple[Optional[str], Optional[np.ndarray], int]:
-	"""Trouve le poster le plus cohérent avec la ROI via HomographyManager.find_best_match.
-
-	Retourne (nom_poster, H_roi_vers_poster_redimensionne, nb_inliers).
-	"""
-	if not posters:
-		return None, None, 0
-
-	# Redimensionne tous les posters à la taille de la ROI pour une comparaison cohérente
-	roi_h, roi_w = roi.shape[:2]
-	poster_imgs_resized: List[np.ndarray] = []
-	for _, poster in posters:
-		poster_resized = cv2.resize(poster, (roi_w, roi_h), interpolation=cv2.INTER_AREA)
-		poster_imgs_resized.append(poster_resized)
-
-	best_H, best_inliers, best_index = h_manager.find_best_match(
-		roi,
-		poster_imgs_resized,
-	)
-
-	if best_H is None or best_inliers < min_inliers or best_index < 0:
-		return None, None, 0
-
-	best_name = posters[best_index][0]
-	return best_name, best_H, best_inliers
-
 
 def main():
 	# ------------------ Chargement données ------------------
@@ -95,15 +46,14 @@ def main():
 	# 1- Récupération du point de regard sur la frame cible
 	gx, gy = gazes_undist[target_frame_idx]
 
-	# 2 - Détection des affiches sur la frame
-	boxes = det_model.predict(frame_undist)
-	bboxes = boxes_to_bboxes(boxes)
-	if len(bboxes) == 0:
+	# 2 - Détection des affiches sur la frame (xyxy directement)
+	bboxes_array = det_model.predict(frame_undist)
+	if bboxes_array is None or len(bboxes_array) == 0:
 		raise RuntimeError("No posters detected on target frame (model output empty)")
 
 	# 3 - Trouver l'affiche regardée: bbox contenant le point de regard
-	looked_bbox: Optional[Tuple[int, int, int, int]] = None
-	for bbox in bboxes:
+	looked_bbox: Optional[np.ndarray] = None
+	for bbox in bboxes_array:
 		x1, y1, x2, y2 = bbox
 		if x1 <= gx <= x2 and y1 <= gy <= y2:
 			looked_bbox = bbox
@@ -112,51 +62,62 @@ def main():
 	if looked_bbox is None:
 		raise RuntimeError("Gaze point not inside any detected poster bbox")
 
-	roi = crop_with_bbox(frame_undist, looked_bbox)
+	# ROI à partir de la bbox regardée
+	x1_lb, y1_lb, x2_lb, y2_lb = looked_bbox.astype(int)
+	roi = frame_undist[y1_lb:y2_lb, x1_lb:x2_lb]
 
-	# 4 - Trouver la meilleure affiche PNG via homographie
-	best_name, best_H, best_inliers = find_best_poster_for_roi(roi, posters, h_manager)
-	if best_name is None or best_H is None:
+	# 4 - Trouver la meilleure affiche PNG via homographie (utilise find_best_match)
+	poster_imgs = [img for _, img in posters]
+	best_H, best_inliers, best_index = h_manager.find_best_match(roi, poster_imgs)
+	if best_H is None or best_index < 0:
 		raise RuntimeError("Could not find a matching poster PNG for ROI")
+
+	best_name = posters[best_index][0]
+	poster_img = posters[best_index][1]
 
 	print("Best poster match:", best_name)
 	print("Number of inliers:", best_inliers)
 
-	# Charger l'image PNG correspondante (taille d'origine)
-	poster_path = os.path.join(loader.get_posters_path(), best_name)
-	poster_img = cv2.imread(poster_path)
-	if poster_img is None:
-		raise RuntimeError(f"Cannot read poster image: {poster_path}")
-
-	# Recalculer homographie entre ROI et poster redimensionné à la taille de la ROI
-	poster_resized = cv2.resize(poster_img, (roi.shape[1], roi.shape[0]), interpolation=cv2.INTER_AREA)
-	H_roi_to_poster, inliers2 = h_manager.compute_homography_between(roi, poster_resized)
-	if H_roi_to_poster is None:
-		raise RuntimeError("Failed to recompute homography between ROI and poster")
+	# Homographie ROI -> poster original
+	H_roi_to_poster = best_H
 
 	# Projeter le point de regard sur l'affiche
 	x1, y1, x2, y2 = looked_bbox
 	local_point = np.array([gx - x1, gy - y1], dtype=np.float32)
 	projected = h_manager.project_point(local_point, H_roi_to_poster)
 	px, py = int(projected[0]), int(projected[1])
- 
+
 	# --------------------- Visualisation ------------------
+	# Image de la vidéo avec bboxes et point de regard
 	vis_frame = frame_undist.copy()
-	for bbox in bboxes:
+	for bbox in bboxes_array:
 		x1b, y1b, x2b, y2b = bbox
-		color = (0, 255, 0) if bbox == looked_bbox else (255, 0, 0)
-		cv2.rectangle(vis_frame, (x1b, y1b), (x2b, y2b), color, 2)
+		color = (0, 255, 0) if np.array_equal(bbox, looked_bbox) else (255, 0, 0)
+		cv2.rectangle(vis_frame, (int(x1b), int(y1b)), (int(x2b), int(y2b)), color, 2)
 	# point regard
-	cv2.circle(vis_frame, (int(gx), int(gy)), 8, (0, 0, 255), -1)
+	cv2.circle(vis_frame, (int(gx), int(gy)), 8, (0, 255, 0), -1)
 
-	vis_poster = poster_resized.copy()
-	cv2.circle(vis_poster, (px, py), 12, (0, 0, 255), -1)
+	# Image d'affiche avec point projeté
+	vis_poster = poster_img.copy()
+	cv2.circle(vis_poster, (px, py), 12, (0, 255, 0), -1)
 
-	cv2.imshow("Frame undistorted with gaze & posters", vis_frame)
-	cv2.imshow("Matched poster with projected gaze", vis_poster)
-	print("Press any key on image windows to close...")
-	cv2.waitKey(0)
-	cv2.destroyAllWindows()
+	# Conversion BGR -> RGB pour matplotlib
+	vis_frame_rgb = cv2.cvtColor(vis_frame, cv2.COLOR_BGR2RGB)
+	vis_poster_rgb = cv2.cvtColor(vis_poster, cv2.COLOR_BGR2RGB)
+
+	plt.figure(figsize=(10, 5))
+	plt.subplot(1, 2, 1)
+	plt.imshow(vis_frame_rgb)
+	plt.title("Frame undistorted with gaze & posters")
+	plt.axis("off")
+
+	plt.subplot(1, 2, 2)
+	plt.imshow(vis_poster_rgb)
+	plt.title("Matched poster with projected gaze")
+	plt.axis("off")
+
+	plt.tight_layout()
+	plt.show()
 
 	cap.release()
 
