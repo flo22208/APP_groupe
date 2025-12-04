@@ -23,6 +23,7 @@ def main():
 	subject_idx = 0
 
 	video_path = get_video_path(loader, subject_idx)
+	K, D = loader.get_load_camera_params(subject_idx)
 	detection_results_csv = loader.get_detection_results_path(subject_idx)
 
 	if os.path.exists(detection_results_csv):
@@ -36,6 +37,9 @@ def main():
 			ret, frame = cap.read()
 			if not ret:
 				break
+
+			# Undistort frame before drawing boxes
+			frame_undist = cv2.undistort(frame, K, D)
 
 			rows = tracks[tracks["frame"] == frame_idx]
 			for _, row in rows.iterrows():
@@ -54,10 +58,10 @@ def main():
 				label = " ".join(label_parts)
 
 				color = (0, 255, 0)
-				cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+				cv2.rectangle(frame_undist, (x1, y1), (x2, y2), color, 2)
 				if label:
 					cv2.putText(
-						frame,
+						frame_undist,
 						label,
 						(x1, max(y1 - 5, 0)),
 						cv2.FONT_HERSHEY_SIMPLEX,
@@ -67,7 +71,7 @@ def main():
 						cv2.LINE_AA,
 					)
 
-			cv2.imshow("Detection tracking demo (from CSV)", frame)
+			cv2.imshow("Detection tracking demo (from CSV, undistorted)", frame_undist)
 			key = cv2.waitKey(1) & 0xFF
 			if key == ord("q") or key == 27:
 				break
@@ -77,13 +81,36 @@ def main():
 	else:
 		weights_path = loader.get_yolo_detection_weights()
 		det_model = DetectionModel(weights_path)
-		det_model.track(
-			source=video_path,
-			conf_threshold=0.3,
-			iou=0.5,
-			persist=True,
-			show=True,
-		)
+
+		cap = cv2.VideoCapture(video_path)
+		if not cap.isOpened():
+			raise RuntimeError(f"Cannot open video: {video_path}")
+
+		while True:
+			ret, frame = cap.read()
+			if not ret:
+				break
+
+			frame_undist = cv2.undistort(frame, K, D)
+
+			# Run detection on undistorted frame
+			boxes_xyxy = det_model.predict(frame_undist, conf_threshold=0.3)
+
+			for x1, y1, x2, y2 in boxes_xyxy:
+				cv2.rectangle(
+					frame_undist,
+					(int(x1), int(y1)),
+					(int(x2), int(y2)),
+					(0, 255, 0),
+					2,
+				)
+
+			cv2.imshow("Detection demo (undistorted)", frame_undist)
+			key = cv2.waitKey(1) & 0xFF
+			if key == ord("q") or key == 27:
+				break
+
+		cap.release()
 		cv2.destroyAllWindows()
 
 
