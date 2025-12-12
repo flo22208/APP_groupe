@@ -1,4 +1,5 @@
 import os
+import time
 
 import cv2
 import numpy as np
@@ -26,7 +27,7 @@ def main():
 	K, D = loader.get_load_camera_params(subject_idx)
 	detection_results_csv = loader.get_detection_results_path(subject_idx)
 
-	if os.path.exists(detection_results_csv):
+	if False:
 		cap = cv2.VideoCapture(video_path)
 		if not cap.isOpened():
 			raise RuntimeError(f"Cannot open video: {video_path}")
@@ -86,15 +87,23 @@ def main():
 		if not cap.isOpened():
 			raise RuntimeError(f"Cannot open video: {video_path}")
 
+		frame_idx = -1
+
 		while True:
 			ret, frame = cap.read()
 			if not ret:
 				break
+			
+			frame_idx += 1
+			if frame_idx % 5 == 0:
+				continue
 
 			frame_undist = cv2.undistort(frame, K, D)
 
 			# Run detection on undistorted frame
+			start_time = time.perf_counter()
 			boxes_xyxy = det_model.predict(frame_undist, conf_threshold=0.3)
+			inference_time = (time.perf_counter() - start_time) * 1000  # ms
 
 			for x1, y1, x2, y2 in boxes_xyxy:
 				cv2.rectangle(
@@ -104,6 +113,18 @@ def main():
 					(0, 255, 0),
 					2,
 				)
+
+			# Display inference time
+			cv2.putText(
+				frame_undist,
+				f"Inference: {inference_time:.1f} ms",
+				(10, 30),
+				cv2.FONT_HERSHEY_SIMPLEX,
+				0.7,
+				(0, 255, 0),
+				2,
+				cv2.LINE_AA,
+			)
 
 			cv2.imshow("Detection demo (undistorted)", frame_undist)
 			key = cv2.waitKey(1) & 0xFF
