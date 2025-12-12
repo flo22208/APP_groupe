@@ -7,6 +7,7 @@ import csv
 from pathlib import Path
 from tqdm import tqdm
 
+
 def main():
     # Charge la configuration et les chemins des sujets
     loader = DataLoader("config.json")
@@ -18,7 +19,7 @@ def main():
     # Parcourt tous les sujets définis dans la config
     num_subjects = len(loader.subjects)
 
-    for subject_idx in range(num_subjects):
+    for subject_idx in range(1,num_subjects):
         subject_path = loader.get_subject_path(subject_idx)
         subject_name = loader.subjects[subject_idx]
 
@@ -64,6 +65,11 @@ def main():
                 ret, frame = cap.read()
                 if not ret:
                     break
+
+                # Traiter seulement toutes les skip_step frames (0, 3, 6, ...)
+                if frame_idx % loader.skip_step != 0:
+                    frame_idx += 1
+                    continue
 
                 # Détordre la frame avant détection/tracking
                 frame_undist = cv2.undistort(frame, K, D)

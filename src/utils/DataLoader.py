@@ -24,6 +24,7 @@ class DataLoader:
 		self.yolo_detection_weights = config["paths"]["yolo_detection_weights"]
 		self.detection_results_filename = config["files"]["detection_results"]
 		self.posters_root = config["paths"].get("posters", "data/Affiches/")
+		self.skip_step = config.get("settings", {}).get("skip_step", 3)
 
 	def get_subject_path(self, subject_idx: int) -> str:
 		subject_name = self.subjects[subject_idx]

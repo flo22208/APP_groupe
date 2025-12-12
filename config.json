@@ -4,6 +4,9 @@
         "yolo_detection_weights": "src/detectionModel/run/weights/best.pt",
         "posters": "data/Affiches/"
     },
+    "settings": {
+        "skip_step": 3
+    },
     "files": {
         "camera_params": "scene_camera.json",
         "gaze": "gaze.csv",

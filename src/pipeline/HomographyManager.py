@@ -55,25 +55,48 @@ class HomographyManager:
 		mask1: Optional[np.ndarray] = None,
 		mask_list: Optional[List[Optional[np.ndarray]]] = None,
 	) -> Tuple[Optional[np.ndarray], int, int]:
-		"""Find the best matching image from a list based on homography inliers.
+		"""Find the best matching image from a list based on number of KNN matches.
 
-		Returns (best_H, best_inliers, best_index).
+		Détecte les keypoints de image1 une seule fois, puis compare avec chaque
+		image de la liste en comptant le nombre de bons matchs (KNN + ratio test).
+
+		Returns (best_H, best_matches_count, best_index).
 		"""
 
-		best_H: Optional[np.ndarray] = None
-		best_inliers = 0
-		best_index = -1
+		# Détecter les keypoints de l'image source une seule fois
+		kp1, desc1 = self.keypoints_manager.detect_and_describe(image1, mask1)
+		if desc1 is None or len(kp1) < 4:
+			return None, 0, -1
 
+		best_H: Optional[np.ndarray] = None
+		best_matches_count = 0
+		best_index = -1
+		best_kp2 = None
+		best_matches = None
+
+		# Comparer avec chaque image de la liste
 		for idx, image2 in enumerate(image_list):
 			mask2 = mask_list[idx] if mask_list is not None else None
-			H, inliers = self.compute_homography_between(image1, image2, mask1, mask2)
+			kp2, desc2 = self.keypoints_manager.detect_and_describe(image2, mask2)
 
-			if inliers > best_inliers:
-				best_inliers = inliers
-				best_H = H
+			if desc2 is None or len(kp2) < 4:
+				continue
+
+			# Matcher avec KNN
+			good_matches = self.keypoints_manager.match_descriptors(desc1, desc2)
+			n_matches = len(good_matches)
+
+			if n_matches > best_matches_count:
+				best_matches_count = n_matches
 				best_index = idx
+				best_kp2 = kp2
+				best_matches = good_matches
 
-		return best_H, best_inliers, best_index
+		# Calculer l'homographie seulement pour la meilleure affiche
+		if best_index >= 0 and best_matches is not None and len(best_matches) >= 4:
+			best_H, _ = self.estimate_homography(kp1, best_kp2, best_matches)
+
+		return best_H, best_matches_count, best_index
 
 	def project_point(self, point: np.ndarray, H: np.ndarray) -> np.ndarray:
 		"""

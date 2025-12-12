@@ -7,7 +7,7 @@ import cv2
 loader = DataLoader("config.json")
 
 # Sujet (0 = premier)
-subject_idx = 0
+subject_idx = 1
 
 # Gaze en pixels undistordus (même espace que la vidéo undistordue)
 gazes = loader.get_undistorted_gazes(subject_idx)

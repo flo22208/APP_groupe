@@ -1,9 +1,11 @@
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
+from collections import defaultdict
 
 import cv2
 import numpy as np
 from tqdm import tqdm
 import os
+import pandas as pd
 
 from src.pipeline.HomographyManager import HomographyManager
 from src.utils.DataLoader import DataLoader
@@ -15,7 +17,12 @@ class GazeAnalyser:
 
 	Charge le modèle de détection, les affiches et le HomographyManager à l'initialisation,
 	puis expose une méthode pour analyser une frame + un point de regard.
+	
+	Système de vote simple : une affiche est confirmée après 3 détections concordantes.
 	"""
+
+	# Nombre de votes nécessaires pour confirmer une affiche
+	VOTES_TO_CONFIRM = 3
 
 	def __init__(self, config_path: str) -> None:
 		self.loader = DataLoader(config_path)
@@ -30,8 +37,55 @@ class GazeAnalyser:
 		if not self.posters:
 			raise RuntimeError("No PNG posters found in posters folder")
 
-        # Cache : Associe les id des affiches détectées aux index dans self.posters
-		self.poster_name_to_index = {}
+		# Cache confirmé : Associe les track_id aux index d'affiches CONFIRMÉS
+		self.poster_name_to_index: Dict[int, int] = {}
+
+		# Système de vote simple : track_id -> list des votes (poster_index)
+		self.vote_cache: Dict[int, List[int]] = defaultdict(list)
+
+	def _get_best_match(self, roi: np.ndarray) -> Optional[int]:
+		"""Trouve la meilleure affiche candidate par nombre de matchs.
+		
+		Retourne l'index de l'affiche ou None si aucune trouvée.
+		"""
+		roi_gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY) if roi.ndim == 3 else roi
+		kp1, desc1 = self.h_manager.keypoints_manager.detect_and_describe(roi_gray)
+		
+		if desc1 is None or len(kp1) < 4:
+			return None
+
+		best_idx = -1
+		best_matches = 0
+
+		for idx, (_, poster_img) in enumerate(self.posters):
+			poster_gray = cv2.cvtColor(poster_img, cv2.COLOR_BGR2GRAY)
+			kp2, desc2 = self.h_manager.keypoints_manager.detect_and_describe(poster_gray)
+			
+			if desc2 is None or len(kp2) < 4:
+				continue
+
+			good_matches = self.h_manager.keypoints_manager.match_descriptors(desc1, desc2)
+			n_matches = len(good_matches)
+			
+			if n_matches > best_matches:
+				best_matches = n_matches
+				best_idx = idx
+
+		return best_idx if best_idx >= 0 else None
+
+	def _update_vote(self, track_id: int, poster_idx: int) -> Optional[int]:
+		"""Ajoute un vote et retourne l'index confirmé si on atteint 3 votes identiques."""
+		self.vote_cache[track_id].append(poster_idx)
+		votes = self.vote_cache[track_id]
+		
+		# Compter les votes pour chaque affiche
+		from collections import Counter
+		counts = Counter(votes)
+		best_idx, best_count = counts.most_common(1)[0]
+		
+		if best_count >= self.VOTES_TO_CONFIRM:
+			return best_idx
+		return None
 
 	def analyse_gaze_on_frame(
 		self,
@@ -39,7 +93,8 @@ class GazeAnalyser:
 		gaze_point: Tuple[float, float],
 		frame_idx: int,
 		subject_idx: int,
-	):
+		tracks_df: pd.DataFrame,
+	) -> Tuple[str, int, Tuple[float, float]]:
 		"""Analyse une frame et un point de regard pour retrouver l'affiche correspondante.
 
 		Utilise les détections pré-calculées dans le CSV detection_results
@@ -50,15 +105,8 @@ class GazeAnalyser:
 
 		gx, gy = gaze_point
 
-		# 1 - Charger les détections depuis le CSV du sujet et filtrer sur frame_idx
-		det_csv_path = self.loader.get_detection_results_path(subject_idx)
-		import pandas as pd
-
-		if not os.path.exists(det_csv_path):
-			raise RuntimeError(f"Detection results CSV not found: {det_csv_path}")
-
-		tracks = pd.read_csv(det_csv_path)
-		rows = tracks[tracks["frame"] == frame_idx]
+		# 1 - Filtrer les détections pour cette frame
+		rows = tracks_df[tracks_df["frame"] == frame_idx]
 		if rows.empty:
 			raise RuntimeError("No posters detected on frame (CSV empty for this frame)")
 
@@ -74,6 +122,7 @@ class GazeAnalyser:
 
 		# 2 - Trouver l'affiche regardée: bbox contenant le point de regard
 		looked_bbox: Optional[np.ndarray] = None
+		looked_bbox_track_id: int = -1
 		for idx, bbox in enumerate(bboxes_array):
 			x1, y1, x2, y2 = bbox
 			if x1 <= gx <= x2 and y1 <= gy <= y2:
@@ -88,28 +137,45 @@ class GazeAnalyser:
 		x1_lb, y1_lb, x2_lb, y2_lb = looked_bbox.astype(int)
 		roi = frame_undist[y1_lb:y2_lb, x1_lb:x2_lb]
 
-		# 4 - Trouver la meilleure affiche PNG via homographie (utilise find_best_match) si affiche non vue auparavant
-		if looked_bbox_track_id not in self.poster_name_to_index:
-			poster_imgs = [img for _, img in self.posters]
-			best_H, best_inliers, best_index = self.h_manager.find_best_match(roi, poster_imgs)
-			if best_index >= 0:
-				self.poster_name_to_index[looked_bbox_track_id] = best_index
-			else:
-				raise RuntimeError("Could not find a matching poster PNG for ROI")
-		else:
+		# 4 - Trouver l'affiche correspondante
+		best_H: Optional[np.ndarray] = None
+		best_index: int = -1
+
+		# Vérifier si on connaît déjà cette affiche (confirmée via système de vote)
+		if looked_bbox_track_id in self.poster_name_to_index:
 			best_index = self.poster_name_to_index[looked_bbox_track_id]
-			best_H, _ = self.h_manager.compute_homography_between(roi, self.posters[best_index][1])
-		
+			poster_img = self.posters[best_index][1]
+			best_H, _ = self.h_manager.compute_homography_between(roi, poster_img)
+		else:
+			# Affiche non encore confirmée : trouver la meilleure et voter
+			candidate_idx = self._get_best_match(roi)
+			
+			if candidate_idx is None:
+				raise RuntimeError("Could not find any matching poster PNG for ROI")
+			
+			# Mettre à jour les votes et vérifier si on peut confirmer
+			confirmed_idx = self._update_vote(looked_bbox_track_id, candidate_idx)
+			
+			if confirmed_idx is not None:
+				# Affiche confirmée ! L'enregistrer
+				self.poster_name_to_index[looked_bbox_track_id] = confirmed_idx
+				best_index = confirmed_idx
+			else:
+				# Pas encore confirmé, utiliser le candidat temporairement
+				best_index = candidate_idx
+			
+			poster_img = self.posters[best_index][1]
+			best_H, _ = self.h_manager.compute_homography_between(roi, poster_img)
+
 		if best_H is None:
 			raise RuntimeError("Homography computation failed")
 
 		best_name = self.posters[best_index][0]
 
 		# 5 - Projeter le point de regard sur l'affiche
-		H_roi_to_poster = best_H
 		x1, y1, x2, y2 = looked_bbox
 		local_point = np.array([gx - x1, gy - y1], dtype=np.float32)
-		projected = self.h_manager.project_point(local_point, H_roi_to_poster)
+		projected = self.h_manager.project_point(local_point, best_H)
 		px, py = float(projected[0]), float(projected[1])
 
 		return best_name, best_index, (px, py)
@@ -135,6 +201,12 @@ class GazeAnalyser:
 		K, D = self.loader.get_load_camera_params(subject_idx)
 		gazes_undist = self.loader.get_undistorted_gazes(subject_idx)
 
+		# Charger le CSV de détections une seule fois
+		det_csv_path = self.loader.get_detection_results_path(subject_idx)
+		if not os.path.exists(det_csv_path):
+			raise RuntimeError(f"Detection results CSV not found: {det_csv_path}")
+		tracks_df = pd.read_csv(det_csv_path)
+
 		import csv
 		from pathlib import Path
 
@@ -144,6 +216,10 @@ class GazeAnalyser:
 		n_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 		if end_frame is None or end_frame > n_frames:
 			end_frame = n_frames
+
+		# Réinitialiser les caches pour ce sujet
+		self.poster_name_to_index.clear()
+		self.vote_cache.clear()
 
 		with output_path.open("w", newline="") as f:
 			writer = csv.writer(f)
@@ -157,6 +233,10 @@ class GazeAnalyser:
 
 			frame_range = range(start_frame, end_frame)
 			for frame_idx in tqdm(frame_range, desc=f"Analysing subject {subject_idx}", unit="frame"):
+				# Traiter seulement toutes les skip_step frames
+				if frame_idx % self.loader.skip_step != 0:
+					continue
+
 				# Sécurité si pas de gaze dispo pour cette frame
 				if frame_idx >= len(gazes_undist):
 					continue
@@ -176,6 +256,7 @@ class GazeAnalyser:
 						(gx, gy),
 						frame_idx,
 						subject_idx,
+						tracks_df,
 					)
 				except RuntimeError:
 					# Pas de détection, ou regard hors affiche : on skip
