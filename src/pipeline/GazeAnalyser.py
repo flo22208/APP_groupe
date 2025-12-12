@@ -81,6 +81,10 @@ class GazeAnalyser:
         """
         Analyse la vidéo d'un sujet, applique le pipeline DETECT/TRACK et sauvegarde les projections.
         """
+        # Paramètres de détection périodique
+        DETECT_EVERY_N_FRAMES = 60  # Détection obligatoire toutes les N frames
+        last_detection_frame = -DETECT_EVERY_N_FRAMES  # Pour forcer la détection dès le début
+        
         # 1. Chargement des données
         cap = self.loader.get_video_capture(subject_idx)
         K, D = self.loader.get_load_camera_params(subject_idx)
@@ -119,9 +123,13 @@ class GazeAnalyser:
                 
                 vis_frame = frame_undist.copy() if visualize else None
                 pipeline_status = "TRACK"
+                
+                # Vérifier si détection périodique obligatoire
+                frames_since_detection = frame_idx - last_detection_frame
+                need_periodic_detection = frames_since_detection >= DETECT_EVERY_N_FRAMES
 
                 # 4. Phase TRACK
-                if self.prev_gray is not None:
+                if self.prev_gray is not None and not need_periodic_detection:
                     lost_trackers = []
                     for track_id, tracker in self.active_trackers.items():
                         if not tracker.update(self.prev_gray, gray_frame) or tracker.is_lost():
@@ -130,9 +138,11 @@ class GazeAnalyser:
                     for track_id in lost_trackers:
                         del self.active_trackers[track_id]
 
-                # 5. Phase DETECT (si nécessaire)
-                if not self.active_trackers:
+                # 5. Phase DETECT (si nécessaire ou périodique)
+                if not self.active_trackers or need_periodic_detection:
                     pipeline_status = "DETECT"
+                    last_detection_frame = frame_idx
+                    self.active_trackers.clear()  # Reset trackers lors d'une nouvelle détection
                     new_trackers = self.detector.detect(frame_undist, gray_frame, gaze_point)
                     for tracker in new_trackers:
                         # Assigner le template au tracker pour un accès futur

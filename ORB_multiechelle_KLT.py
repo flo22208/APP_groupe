@@ -11,7 +11,7 @@ from src.utils.DataLoader import DataLoader
 
 NB_POI = 2000
 TOP_FILTRAGE = 1000
-subject_idx = 2
+subject_idx = 1
 poster_folder = "data/Affiches"
 DETECT_EVERY_N_FRAMES_NO_TRACK = 5  
 DETECT_EVERY_N_FRAMES_TRACKING = 30  
