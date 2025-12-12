@@ -28,7 +28,7 @@ class DetectionModel:
         )
         return results[0].boxes.xyxy.cpu().numpy()
 
-    def track(self, source, conf_threshold: float = 0.3, iou: float = 0.5, persist: bool = True, show: bool = False):
+    def track(self, source, conf_threshold: float = 0.3, iou: float = 0.5, persist: bool = True, show: bool = False, verbose: bool = False):
         """Effectue du tracking multi-objet sur une source vidéo.
 
         `source` peut être un chemin vidéo, un index de webcam, etc.
@@ -41,6 +41,7 @@ class DetectionModel:
             iou=iou,
             persist=persist,
             show=show,
+            verbose=verbose,
             device=self.device if self.device is not None else None,
         )
         return results

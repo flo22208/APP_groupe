@@ -7,7 +7,7 @@ def main() -> None:
 	output_csv = "data/gaze_projections_subject1.csv"
 
 	gaze_analyser = GazeAnalyser(config_path)
-	gaze_analyser.analyse_video_for_subject(subject_idx, output_csv, start_frame=50)
+	gaze_analyser.analyse_video_for_subject(subject_idx, output_csv, start_frame=50, visualize=True)
 
 
 if __name__ == "__main__":
