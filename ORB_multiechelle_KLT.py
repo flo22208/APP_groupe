@@ -9,13 +9,13 @@ from src.utils.data_loader import DataLoader
 
 # PARAMÈTRES GLOBAUX
 
-NB_POI = 2000
-TOP_FILTRAGE = 1000
-subject_idx = 2
+NB_POI = 3000
+TOP_FILTRAGE = 2000
+subject_idx = 3
 poster_folder = "posters/"
 DETECT_EVERY_N_FRAMES_NO_TRACK = 5  
-DETECT_EVERY_N_FRAMES_TRACKING = 30  
-MIN_MATCHES = 10
+DETECT_EVERY_N_FRAMES_TRACKING = 3000
+MIN_MATCHES = 15
 RATIO_THRESHOLD = 0.7
 BEST_THRESHOLD = 15
 FILTRAGE = 0
@@ -122,25 +122,14 @@ def detect_posters_multiscale(frame, templates, orb, gaze_x=None, gaze_y=None,
 
     # Définition de la ROI
     if ROI and gaze_x is not None and gaze_y is not None:
-        if len(last_detected) > 0:
-                poster = last_detected[0]
-                corners = poster["corners"]
-                x_min = int(np.min(corners[:,0])); x_max = int(np.max(corners[:,0]))
-                y_min = int(np.min(corners[:,1])); y_max = int(np.max(corners[:,1]))
-                padding = 20
-                x1_roi = max(0, x_min - padding)
-                x2_roi = min(w, x_max + padding)
-                y1_roi = max(0, y_min - padding)
-                y2_roi = min(h, y_max + padding)
+        roi_w = 900 if ROI else w
+        x1_roi = max(0, gaze_x - roi_w // 2)  # FIX: utiliser gaze_x au lieu de x
+        x2_roi = min(w, gaze_x + roi_w // 2)
+        if roi_height is None:
+            y1_roi, y2_roi = 0, h
         else:
-            roi_w = 900 if ROI else w
-            x1_roi = max(0, x - roi_w // 2)
-            x2_roi = min(w, x + roi_w // 2)
-            if roi_height is None:
-                y1_roi, y2_roi = 0, h
-            else:
-                y1_roi = max(0, y - roi_height // 2)
-                y2_roi = min(h, y + roi_height // 2)
+            y1_roi = max(0, gaze_y - roi_height // 2)  # FIX: utiliser gaze_y
+            y2_roi = min(h, gaze_y + roi_height // 2)
 
         if annotated is not None:
             cv2.rectangle(annotated, (x1_roi, y1_roi), (x2_roi, y2_roi), (255, 0, 255), 2)
@@ -210,8 +199,6 @@ def detect_posters_multiscale(frame, templates, orb, gaze_x=None, gaze_y=None,
                 continue
 
             src_pts = np.float32([kp_t[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
-            
-            # Si on utilise la ROI, les keypoints de la frame sont déjà dans le bon référentiel
             dst_pts = np.float32([kp_frame[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
 
             H, mask_ransac = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
@@ -238,11 +225,13 @@ def detect_posters_multiscale(frame, templates, orb, gaze_x=None, gaze_y=None,
     if best_poster is None:
         return []
 
-    # Calculer les coins projetés
+    # Calculer les coins projetés ET LES ORDONNER IMMÉDIATEMENT
     h_t, w_t = best_poster["best_scale"]["img"].shape[:2]
     corners = np.float32([[0, 0], [w_t, 0], [w_t, h_t], [0, h_t]]).reshape(-1, 1, 2)
     projected = cv2.perspectiveTransform(corners, best_poster["H"])
     best_poster["corners"] = projected.reshape(4, 2)
+    
+    best_poster["template_corners_ordered"] = corners.reshape(4, 2)
 
     detected_posters.append(best_poster)
     print(f"Affiche détectée: {best_poster['name']} - {best_poster['inliers']} inliers (échelle {best_poster['best_scale']['scale']})")
@@ -306,18 +295,30 @@ def estimate_corners_from_tracking(tracked_points, original_points, original_cor
     return new_corners.reshape(-1, 2)
 
 class PosterTracker:
-    """Gère le suivi d'une affiche avec KLT"""
     def __init__(self, poster_data, gray_frame):
         self.name = poster_data['name']
-        self.corners = poster_data['corners']
-        self.poster_data = poster_data  # Contient img_orig_shape, best_scale, etc.
+        self.corners = self._order_corners(poster_data['corners'])  # ← CORRECTION ICI
+        self.poster_data = poster_data
+        self.poster_data['corners'] = self.corners  # Mettre à jour avec les coins ordonnés
         self.features = init_klt_tracking(gray_frame, self.corners)
         self.original_features = self.features.copy()
         self.original_corners = self.corners.copy()
         self.frames_tracked = 0
         self.frames_lost = 0
         self.max_frames_lost = 10
-        self.min_features = 10  # Seuil minimum de features
+        self.min_features = 10
+    
+    def _order_corners(self, corners):
+        """Ordonne les coins dans le sens : HG, HD, BD, BG"""
+        sum_coords = corners.sum(axis=1)
+        top_left = corners[np.argmin(sum_coords)]
+        bottom_right = corners[np.argmax(sum_coords)]
+        
+        diff_coords = corners[:, 1] - corners[:, 0]
+        top_right = corners[np.argmin(diff_coords)]
+        bottom_left = corners[np.argmax(diff_coords)]
+        
+        return np.array([top_left, top_right, bottom_right, bottom_left], dtype=np.float32)
     
     def update(self, prev_gray, curr_gray):
         """Met à jour le suivi KLT"""
@@ -339,7 +340,8 @@ class PosterTracker:
             return self.frames_lost < self.max_frames_lost
         
         self.features = new_features.reshape(-1, 1, 2)
-        self.corners = new_corners
+        self.corners = self._order_corners(new_corners)  # ← CORRECTION ICI AUSSI
+        self.poster_data['corners'] = self.corners  # Mettre à jour
         self.frames_tracked += 1
         self.frames_lost = 0
         
@@ -366,34 +368,37 @@ def check_gaze_on_poster(x, y, corners):
 
 def compute_gaze_on_poster(x, y, poster_data):
     """Calcule les coordonnées du regard dans le repère de l'affiche originale"""
-    # Dimensions de l'image à l'échelle utilisée pour la détection
+    
+    # Utiliser les coins ORDONNÉS stockés lors de la détection
     h_scaled, w_scaled = poster_data["best_scale"]["img"].shape[:2]
     scale = poster_data["best_scale"]["scale"]
     
-    # Points sources (coins du template à l'échelle réduite)
+    # Coins du template dans l'ordre TL, TR, BR, BL
     src_corners = np.float32([[0, 0], [w_scaled, 0], [w_scaled, h_scaled], [0, h_scaled]])
     
-    # Points destinations (coins projetés dans la frame)
+    # Coins dans la frame (ordonnés par _order_corners)
     dst_corners = poster_data["corners"].astype(np.float32)
     
-    # Calculer l'homographie inverse (frame -> template à l'échelle réduite)
-    H_inv, _ = cv2.findHomography(dst_corners, src_corners)
+    # Calculer l'homographie frame → template
+    H_inv, status = cv2.findHomography(dst_corners, src_corners)
     
-    if H_inv is not None:
-        pt = np.array([[[x, y]]], dtype=np.float32)
-        pt_affiche = cv2.perspectiveTransform(pt, H_inv)
-        gx_aff_scaled, gy_aff_scaled = pt_affiche[0, 0]
-        
-        # Rescaler vers l'image originale du poster
-        gx_aff = gx_aff_scaled / scale
-        gy_aff = gy_aff_scaled / scale
-        
-        # Dimensions de l'image originale pour le clipping
-        h_orig, w_orig = poster_data["img_orig_shape"]
-        gx_aff = float(np.clip(gx_aff, 0, w_orig - 1))
-        gy_aff = float(np.clip(gy_aff, 0, h_orig - 1))
-        
-        return gx_aff, gy_aff
+    if H_inv is None:
+        return None, None
+    
+    # Appliquer la transformation
+    pt = np.array([[[x, y]]], dtype=np.float32)
+    pt_template_scaled = cv2.perspectiveTransform(pt, H_inv)
+    gx_scaled, gy_scaled = pt_template_scaled[0, 0]
+    
+    # Rescaler vers l'image originale
+    gx_aff = gx_scaled / scale
+    gy_aff = gy_scaled / scale
+    
+    # Vérifier les limites
+    h_orig, w_orig = poster_data["img_orig_shape"]
+    
+    if 0 <= gx_aff < w_orig and 0 <= gy_aff < h_orig:
+        return float(gx_aff), float(gy_aff)
     
     return None, None
 
@@ -528,7 +533,14 @@ if __name__ == '__main__':
         for tracker in active_trackers:
             if tracker.is_valid():
                 corners_int = np.int32(tracker.corners)
-                
+
+                if len(active_trackers) > 0:
+                    tracker = active_trackers[0]
+                    
+                    for i, corner in enumerate(tracker.corners):
+                        gx, gy = compute_gaze_on_poster(corner[0], corner[1], tracker.poster_data)
+
+               
                 # Couleur selon la durée du suivi
                 if tracker.frames_tracked < 10:
                     color = (0, 255, 255)  # Jaune: nouveau
@@ -577,7 +589,7 @@ if __name__ == '__main__':
         interval = DETECT_EVERY_N_FRAMES_TRACKING if has_trackers else DETECT_EVERY_N_FRAMES_NO_TRACK
         next_detect = max(0, interval - frames_since)
         
-        status_text = f"Frame: {frame_index} | Trackers: {len(active_trackers)} | Next detect: {next_detect}"
+        status_text = f"Frame: {frame_index} | Trackers: {len(active_trackers)} | Prochaine détection: {next_detect}"
         cv2.putText(annotated, status_text, 
                    (10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         y_offset += 25
@@ -605,9 +617,5 @@ if __name__ == '__main__':
     
     cap.release()
     cv2.destroyAllWindows()
-    
-    print("\n=== Statistiques de fixation sur les affiches ===")
-    for name, count in sorted(gaze_stats.items(), key=lambda x: x[1], reverse=True):
-        print(f"{name}: {count} frames ({count/frame_index*100:.2f}%)")
     
     print("\nFichiers CSV sauvegardés dans le dossier 'gaze_points/'")
