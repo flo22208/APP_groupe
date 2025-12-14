@@ -38,42 +38,32 @@ class PosterDetector:
         """
         Exécute la détection YOLO, trouve l'affiche regardée, et initialise un tracker.
         """
-        # 1. Détection YOLO avec tracking pour obtenir toutes les affiches
-        results = self.det_model.track(frame, persist=True, verbose=False)
-        if not results or not hasattr(results[0], 'boxes') or results[0].boxes is None or results[0].boxes.id is None:
+        # 1. Détection YOLO rapide
+        xyxy = self.det_model.predict(frame)
+        
+        # Skip immédiat si pas de détections
+        if xyxy is None or len(xyxy) == 0:
             return []
-
-        detections = []
-        boxes = results[0].boxes
-        xyxy = boxes.xyxy.cpu().numpy()
-        track_ids = boxes.id.cpu().numpy().astype(int)
-        confs = boxes.conf.cpu().numpy() if boxes.conf is not None else [0.0] * len(xyxy)
-        cls_ids = boxes.cls.cpu().numpy().astype(int) if boxes.cls is not None else [0] * len(xyxy)
-
-        for i in range(len(xyxy)):
-            detections.append(
-                (xyxy[i][0], xyxy[i][1], xyxy[i][2], xyxy[i][3], confs[i], cls_ids[i], track_ids[i])
-            )
 
         # 2. Trouver la bbox contenant le point de regard
         gx, gy = gaze_point
         looked_det = None
         min_distance = float('inf')
 
-        for det in detections:
-            x1, y1, x2, y2, _, _, _ = det
+        for i in range(len(xyxy)):
+            x1, y1, x2, y2 = xyxy[i]
             if x1 <= gx <= x2 and y1 <= gy <= y2:
                 center_x, center_y = (x1 + x2) / 2, (y1 + y2) / 2
                 dist = (gx - center_x)**2 + (gy - center_y)**2
                 if dist < min_distance:
                     min_distance = dist
-                    looked_det = det
+                    looked_det = (x1, y1, x2, y2, i)
         
         if looked_det is None:
             return []
 
         # 3. Pour la bbox regardée, extraire la ROI et matcher
-        x1, y1, x2, y2, conf, cls, track_id = looked_det
+        x1, y1, x2, y2, track_id = looked_det
         roi = gray_frame[int(y1):int(y2), int(x1):int(x2)]
         if roi.size == 0:
             return []

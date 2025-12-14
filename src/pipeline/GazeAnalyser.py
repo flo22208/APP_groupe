@@ -77,12 +77,16 @@ class GazeAnalyser:
         start_frame: int = 0,
         end_frame: Optional[int] = None,
         visualize: bool = False,
+        always_detect: bool = False,
     ) -> None:
         """
         Analyse la vidéo d'un sujet, applique le pipeline DETECT/TRACK et sauvegarde les projections.
+        
+        Args:
+            always_detect: Si True, désactive le tracking et fait une détection à chaque frame.
         """
         # Paramètres de détection périodique
-        DETECT_EVERY_N_FRAMES = 60  # Détection obligatoire toutes les N frames
+        DETECT_EVERY_N_FRAMES = 1 if always_detect else 60  # Détection à chaque frame si always_detect
         last_detection_frame = -DETECT_EVERY_N_FRAMES  # Pour forcer la détection dès le début
         
         # 1. Chargement des données
