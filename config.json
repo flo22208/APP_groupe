@@ -1,18 +1,32 @@
 {
+    "_description": "Configuration du pipeline de traitement des données de regard",
+    
     "paths": {
         "acquisition_data": "data/AcquisitionsEyeTracker/",
         "yolo_detection_weights": "src/detectionModel/run/weights/best.pt",
         "posters": "data/Affiches/"
     },
-    "settings": {
-        "skip_step": 3
+    
+    "output": {
+        "projections_dir": "data/",
+        "projections_prefix": "gaze_projections_subject"
     },
+    
+    "settings": {
+        "skip_step": 3,
+        "start_frame": 7000,
+        "end_frame": 8000,
+        "detection_confidence": 0.3,
+        "tracking_iou": 0.5
+    },
+    
     "files": {
         "camera_params": "scene_camera.json",
         "gaze": "gaze.csv",
         "world_timestamps": "world_timestamps.csv",
         "detection_results": "detection_results.csv"
     },
+    
     "subjects": [
         "sujet1_f-42e0d11a/",
         "sujet2_f-835bf855/",

@@ -14,6 +14,9 @@ class DetectionModel:
             self.model.to(device)
         except Exception:
             # Si le device n'est pas dispo, on laisse le défaut ultralytics
+            print(f"Warning: could not move model to device '{device}'. Using default device.")
+            # Propager l'exception si besoin
+            print('Exception details:', Exception)
             self.device = None
 
     def predict(self, image, conf_threshold: float = 0.25)-> np.ndarray:

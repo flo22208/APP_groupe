@@ -1,5 +1,17 @@
+"""
+Module d'analyse des regards - Projection sur les affiches.
+
+Ce module gère la projection des points de regard eye-tracking sur les affiches
+detectées dans les images. Il utilise:
+- Les détections YOLO pré-calculées (detection_results.csv)
+- Le matching de features ORB pour identifier l'affiche
+- L'homographie pour projeter le point de regard
+"""
+
 from typing import Dict, List, Optional, Tuple
-from collections import defaultdict
+from collections import defaultdict, Counter
+import csv
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -13,12 +25,18 @@ from src.detectionModel.DetectionModel import DetectionModel
 
 
 class GazeAnalyser:
-	"""Analyseur de regard basé sur détection + homographie.
-
-	Charge le modèle de détection, les affiches et le HomographyManager à l'initialisation,
-	puis expose une méthode pour analyser une frame + un point de regard.
+	"""
+	Analyseur de regard basé sur détection + homographie.
 	
-	Système de vote simple : une affiche est confirmée après plusieurs détections concordantes.
+	Pipeline d'analyse:
+	1. Charge les détections YOLO pré-calculées
+	2. Pour chaque frame, trouve l'affiche regardée (bbox contenant le point de regard)
+	3. Identifie l'affiche via matching de features ORB
+	4. Calcule l'homographie ROI -> affiche de référence
+	5. Projette le point de regard dans le référentiel de l'affiche
+	
+	Système de vote: une affiche est confirmée après plusieurs détections concordantes
+	pour éviter les erreurs ponctuelles d'identification.
 	"""
 
 	# Nombre de votes nécessaires pour confirmer une affiche
@@ -126,7 +144,6 @@ class GazeAnalyser:
 		votes = self.vote_cache[track_id]
 		
 		# Compter les votes pour chaque affiche
-		from collections import Counter
 		counts = Counter(votes)
 		best_idx, best_count = counts.most_common(1)[0]
 		
@@ -148,8 +165,12 @@ class GazeAnalyser:
 		frame_idx: int,
 		subject_idx: int,
 		tracks_df: pd.DataFrame,
+		use_cache: bool = True,
 	) -> Tuple[str, int, Tuple[float, float]]:
 		"""Analyse une frame et un point de regard pour retrouver l'affiche correspondante.
+		
+		Args:
+			use_cache: Si False, détecte l'affiche à chaque frame sans utiliser le cache de votes
 
 		Utilise les détections pré-calculées dans le CSV detection_results
 		pour la frame donnée au lieu de relancer YOLO.
@@ -210,8 +231,8 @@ class GazeAnalyser:
 		best_index: int = -1
 		match_count: int = 0
 
-		# Vérifier si on connaît déjà cette affiche (confirmée via système de vote)
-		if looked_bbox_track_id in self.poster_name_to_index:
+		# Mode avec cache: utiliser le système de vote par track_id
+		if use_cache and looked_bbox_track_id in self.poster_name_to_index:
 			best_index = self.poster_name_to_index[looked_bbox_track_id]
 			poster_img = self.posters[best_index][1]
 			best_H, _ = self.h_manager.compute_homography_between(roi, poster_img)
@@ -220,21 +241,25 @@ class GazeAnalyser:
 			if best_H is None and looked_bbox_track_id in self.homography_cache:
 				best_H = self.homography_cache[looked_bbox_track_id]
 		else:
-			# Affiche non encore confirmée : trouver la meilleure et voter
+			# Affiche non encore confirmée ou mode sans cache : trouver la meilleure
 			candidate_idx, match_count = self._get_best_match(roi)
 			
 			if candidate_idx is None:
 				raise RuntimeError(f"Could not find any matching poster PNG for ROI (best match: {match_count} features)")
 			
-			# Mettre à jour les votes et vérifier si on peut confirmer
-			confirmed_idx = self._update_vote(looked_bbox_track_id, candidate_idx, match_count)
-			
-			if confirmed_idx is not None:
-				# Affiche confirmée ! L'enregistrer
-				self.poster_name_to_index[looked_bbox_track_id] = confirmed_idx
-				best_index = confirmed_idx
+			if use_cache:
+				# Mettre à jour les votes et vérifier si on peut confirmer
+				confirmed_idx = self._update_vote(looked_bbox_track_id, candidate_idx, match_count)
+				
+				if confirmed_idx is not None:
+					# Affiche confirmée ! L'enregistrer
+					self.poster_name_to_index[looked_bbox_track_id] = confirmed_idx
+					best_index = confirmed_idx
+				else:
+					# Pas encore confirmé, utiliser le candidat temporairement
+					best_index = candidate_idx
 			else:
-				# Pas encore confirmé, utiliser le candidat temporairement
+				# Mode sans cache : utiliser directement le candidat
 				best_index = candidate_idx
 			
 			poster_img = self.posters[best_index][1]
@@ -272,16 +297,32 @@ class GazeAnalyser:
 		output_csv_path: str,
 		start_frame: int = 0,
 		end_frame: Optional[int] = None,
+		use_cache: bool = True,
+		show: bool = False,
 	) -> None:
-		"""Analyse une vidéo d'un sujet et sauvegarde les résultats dans un CSV.
+		"""
+		Analyse une vidéo d'un sujet et sauvegarde les résultats dans un CSV.
 
-		Chaque ligne du CSV contient :
-		frame_idx, poster_name, poster_index, proj_x, proj_y
+		Pour chaque frame traitée, projette le point de regard sur l'affiche
+		correspondante et enregistre les coordonnées dans le référentiel de l'affiche.
+
+		Chaque ligne du CSV contient:
+		- frame_idx: Index de la frame dans la vidéo
+		- poster_name: Nom du fichier de l'affiche détectée
+		- poster_index: Index de l'affiche dans la liste des affiches
+		- proj_x, proj_y: Coordonnées du regard projeté sur l'affiche
 
 		Les frames sans détection d'affiche ou sans regard sur une affiche
-		sont simplement ignorées (pas de ligne écrite).
+		sont ignorées (pas de ligne écrite dans le CSV).
+		
+		Args:
+			subject_idx: Index du sujet dans la liste des sujets
+			output_csv_path: Chemin du fichier CSV de sortie
+			start_frame: Frame de départ (défaut: 0)
+			end_frame: Frame de fin (défaut: dernière frame)
+			use_cache: Si False, détecte l'affiche à chaque frame sans cache de votes
+			show: Si True, affiche les détections en temps réel
 		"""
-
 		# Récupérer capture vidéo et gazes pour le sujet
 		cap = self.loader.get_video_capture(subject_idx)
 		K, D = self.loader.get_load_camera_params(subject_idx)
@@ -292,9 +333,6 @@ class GazeAnalyser:
 		if not os.path.exists(det_csv_path):
 			raise RuntimeError(f"Detection results CSV not found: {det_csv_path}")
 		tracks_df = pd.read_csv(det_csv_path)
-
-		import csv
-		from pathlib import Path
 
 		output_path = Path(output_csv_path)
 		output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -320,7 +358,7 @@ class GazeAnalyser:
 			])
 
 			frame_range = range(start_frame, end_frame)
-			for frame_idx in tqdm(frame_range, desc=f"Analysing subject {subject_idx}", unit="frame"):
+			for frame_idx in tqdm(frame_range, desc=f"  Projection sujet {subject_idx}", unit="frame", ncols=80):
 				# Traiter seulement toutes les skip_step frames
 				if frame_idx % self.loader.skip_step != 0:
 					continue
@@ -345,12 +383,57 @@ class GazeAnalyser:
 						frame_idx,
 						subject_idx,
 						tracks_df,
+						use_cache=use_cache,
 					)
-				except RuntimeError:
+					detection_success = True
+				except RuntimeError as e:
 					# Pas de détection, ou regard hors affiche : on skip
-					continue
+					tqdm.write(f"  [Frame {frame_idx}] Échec: {str(e)}")
+					detection_success = False
+					best_name, best_index, px, py = None, -1, 0, 0
+
+				# Visualisation en temps réel si demandé
+				if show:
+					vis_frame = frame_undist.copy()
+					
+					# Dessiner toutes les bboxes détectées sur cette frame
+					frame_detections = tracks_df[tracks_df["frame"] == frame_idx]
+					for _, row in frame_detections.iterrows():
+						x1, y1 = int(row["x1"]), int(row["y1"])
+						x2, y2 = int(row["x2"]), int(row["y2"])
+						track_id = int(row["track_id"])
+						
+						# Couleur verte si c'est l'affiche regardée, bleue sinon
+						color = (0, 255, 0) if detection_success else (255, 0, 0)
+						cv2.rectangle(vis_frame, (x1, y1), (x2, y2), color, 2)
+						cv2.putText(vis_frame, f"ID:{track_id}", (x1, y1-10), 
+									cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+					
+					# Dessiner le point de regard
+					gaze_color = (0, 255, 255)  # Jaune
+					cv2.circle(vis_frame, (int(gx), int(gy)), 10, gaze_color, -1)
+					cv2.circle(vis_frame, (int(gx), int(gy)), 15, gaze_color, 2)
+					
+					# Afficher le nom de l'affiche détectée
+					if detection_success:
+						info_text = f"Frame {frame_idx} | {best_name} | ({px:.0f}, {py:.0f})"
+						cv2.putText(vis_frame, info_text, (10, 30), 
+									cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+					else:
+						cv2.putText(vis_frame, f"Frame {frame_idx} | Pas de detection", (10, 30), 
+									cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+					
+					# Afficher la frame
+					cv2.imshow("Gaze Analysis - Press 'q' to quit", vis_frame)
+					key = cv2.waitKey(1) & 0xFF
+					if key == ord('q'):
+						tqdm.write("  Visualisation interrompue par l'utilisateur")
+						break
 
 				# On écrit uniquement les frames valides
+				if not detection_success:
+					continue
+					
 				writer.writerow([
 					frame_idx,
 					best_name,
@@ -360,6 +443,8 @@ class GazeAnalyser:
 				])
 
 		cap.release()
+		if show:
+			cv2.destroyAllWindows()
 
 
 __all__ = ["GazeAnalyser"]
